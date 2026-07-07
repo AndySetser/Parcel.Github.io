@@ -1,0 +1,108 @@
+name: Update market snapshot
+
+# Pulls from FRED (mortgage rate) and Census ACS (median home value) and
+# combines them into data.json, each field tagged with where it actually
+# came from. Built to degrade gracefully: if one source fails, that field
+# falls back to a labeled sample value instead of crashing the whole run.
+#
+# Setup:
+#   - Free FRED key: https://fred.stlouisfed.org/docs/api/api_key.html
+#   - Free Census key (optional, raises rate limits): https://api.census.gov/data/key_signup.html
+#   - Add both as repo secrets: Settings > Secrets and variables > Actions
+#     Names: FRED_API_KEY, CENSUS_API_KEY (Census key can be left blank)
+#   - COUNTY_FIPS below defaults to Alamosa County, CO (state 08, county 003).
+
+on:
+  schedule:
+    - cron: "0 13 * * 1"   # weekly, Monday 6am Mountain (13:00 UTC)
+  workflow_dispatch: {}
+
+jobs:
+  update-market-data:
+    runs-on: ubuntu-latest
+    env:
+      STATE_FIPS: "08"
+      COUNTY_FIPS: "003"
+      REGION_NAME: "Alamosa County, CO"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get update -y && sudo apt-get install -y jq
+
+      - name: Fetch mortgage rate from FRED
+        id: fred
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: |
+          curl -s "https://api.stlouisfed.org/fred/series/observations?series_id=MORTGAGE30US&api_key=${FRED_API_KEY}&file_type=json&sort_order=desc&limit=1" \
+            -o fred_raw.json || true
+
+          RATE=$(jq -r '.observations[0].value // empty' fred_raw.json 2>/dev/null)
+
+          if [[ "$RATE" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+            echo "rate=$RATE" >> "$GITHUB_OUTPUT"
+            echo "rate_source=FRED (live)" >> "$GITHUB_OUTPUT"
+          else
+            echo "FRED fetch/parse failed — falling back to sample rate"
+            echo "rate=6.42" >> "$GITHUB_OUTPUT"
+            echo "rate_source=sample — FRED fetch failed this run" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch median home value from Census ACS
+        id: census
+        env:
+          CENSUS_API_KEY: ${{ secrets.CENSUS_API_KEY }}
+        run: |
+          KEY_PARAM=""
+          if [ -n "$CENSUS_API_KEY" ]; then KEY_PARAM="&key=${CENSUS_API_KEY}"; fi
+
+          curl -s "https://api.census.gov/data/2023/acs/acs5?get=NAME,B25077_001E&for=county:${COUNTY_FIPS}&in=state:${STATE_FIPS}${KEY_PARAM}" \
+            -o census_raw.json || true
+
+          # Census returns a JSON ARRAY on success: [["NAME","B25077_001E",...],["Alamosa County, Colorado","230100","08","003"]]
+          # On failure it returns an error STRING or HTML, not an array — check that first.
+          if jq -e 'type == "array"' census_raw.json >/dev/null 2>&1; then
+            VALUE=$(jq -r '.[1][1] // empty' census_raw.json 2>/dev/null)
+          else
+            VALUE=""
+          fi
+
+          if [[ "$VALUE" =~ ^[0-9]+$ ]]; then
+            echo "value=$VALUE" >> "$GITHUB_OUTPUT"
+            echo "value_source=Census ACS 5-Year (B25077) — assessor-based typical value, not a live listing price" >> "$GITHUB_OUTPUT"
+          else
+            echo "Census fetch/parse failed — falling back to sample value"
+            echo "value=342000" >> "$GITHUB_OUTPUT"
+            echo "value_source=sample — Census fetch failed this run" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build data.json
+        run: |
+          jq -n \
+            --arg updated "$(date +%F)" \
+            --arg region "$REGION_NAME" \
+            --argjson rate "${{ steps.fred.outputs.rate }}" \
+            --arg rate_source "${{ steps.fred.outputs.rate_source }}" \
+            --argjson value "${{ steps.census.outputs.value }}" \
+            --arg value_source "${{ steps.census.outputs.value_source }}" \
+            '{
+              updated: $updated,
+              region: $region,
+              median_list_price: $value,
+              median_list_price_source: $value_source,
+              median_days_on_market: 41,
+              median_days_on_market_source: "sample — no free source found yet",
+              mortgage_rate_30yr: $rate,
+              mortgage_rate_30yr_source: $rate_source,
+              source: "Census ACS + FRED, best-effort per run"
+            }' > data.json
+          cat data.json
+
+      - name: Commit updated data
+        run: |
+          git config user.name "parcel-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data.json
+          git diff --quiet --cached || git commit -m "Auto-update market snapshot"
+          git push
