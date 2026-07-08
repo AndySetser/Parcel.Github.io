@@ -1,0 +1,18 @@
+[
+  {
+    "id": 0,
+    "addr": "8214 Van Iwarden Dr, Alamosa, CO 81101",
+    "price": "$225,000",
+    "meta": "2 bd · 2 ba · 1,360 sqft",
+    "tags": [
+      "Single Family",
+      "floorCount: 1",
+      "heating: TRUE",
+      "heatingType: Hot Water",
+      "architectureType: Ranch"
+    ],
+    "status": "known_property",
+    "last_sale_date": "2021-07-19T00:00:00.000Z",
+    "year_built": 1996
+  }
+]
