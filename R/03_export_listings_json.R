@@ -25,7 +25,7 @@ properties <- read.csv(IN_FILE, stringsAsFactors = FALSE)
 
 format_price <- function(p) {
   if (is.na(p) || p == 0) return("Price unavailable")
-  paste0("$", format(round(p), big.mark = ","))
+  paste0("Last sold $", format(round(p), big.mark = ","))
 }
 
 format_meta <- function(beds, baths, sqft) {
