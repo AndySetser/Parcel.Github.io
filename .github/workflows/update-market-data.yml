@@ -35,7 +35,7 @@ jobs:
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: |
-          curl -sL "https://api.stlouisfed.org/fred/series/observations?series_id=MORTGAGE30US&api_key=${FRED_API_KEY}&file_type=json&sort_order=desc&limit=1" \
+          curl -s "https://api.stlouisfed.org/fred/series/observations?series_id=MORTGAGE30US&api_key=${FRED_API_KEY}&file_type=json&sort_order=desc&limit=1" \
             -o fred_raw.json || true
           RATE=$(jq -r '.observations[0].value // empty' fred_raw.json 2>/dev/null)
           if [[ "$RATE" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
@@ -54,8 +54,12 @@ jobs:
         run: |
           KEY_PARAM=""
           if [ -n "$CENSUS_API_KEY" ]; then KEY_PARAM="&key=${CENSUS_API_KEY}"; fi
-          curl -sL "https://api.census.gov/data/2023/acs/acs5?get=NAME,B25077_001E&for=county:${COUNTY_FIPS}&in=state:${STATE_FIPS}${KEY_PARAM}" \
+          curl -sL -A "Mozilla/5.0 (compatible; ParcelBot/1.0)" -w "\nHTTP_STATUS:%{http_code}\n" \
+            "https://api.census.gov/data/2023/acs/acs5?get=NAME,B25077_001E&for=county:${COUNTY_FIPS}&in=state:${STATE_FIPS}${KEY_PARAM}" \
             -o census_raw.json || true
+          echo "===== RAW CENSUS RESPONSE ====="
+          cat census_raw.json
+          echo "===== END RAW CENSUS RESPONSE ====="
           if jq -e 'type == "array"' census_raw.json >/dev/null 2>&1; then
             VALUE=$(jq -r '.[1][1] // empty' census_raw.json 2>/dev/null)
           else
